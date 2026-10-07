@@ -49,6 +49,19 @@ disabled or the token lacks rights on a given controller, that controller is rec
 
 ## Usage
 
+The engagement is a two-step flow: **(1)** collect the inventory, then **(2)** build the
+client-friendly Excel report pack from it.
+
+```bash
+# Step 1 — collect the inventory (writes CSV/JSON under output/<stamp>_environment-inventory/):
+python generate_environment_inventory.py --oc-url https://cjoc.example.com
+
+# Step 2 — build the Excel workbooks from the newest run (writes to <run>/reports/):
+python build_excel_reports.py
+```
+
+More collection options:
+
 ```bash
 # From this directory:
 python generate_environment_inventory.py --oc-url https://cjoc.example.com
@@ -65,6 +78,28 @@ python generate_environment_inventory.py -h   # full help
 
 The script can be launched from any working directory — it `chdir`s into its own folder,
 so `output/` always lands here regardless of where you invoke it.
+
+## Client-friendly Excel reports
+
+After a run, turn the CSV/JSON output into clean, labeled Excel workbooks for the client:
+
+```bash
+pip install openpyxl   # (already in requirements.txt)
+python build_excel_reports.py                 # newest run under ./output
+python build_excel_reports.py --run-dir output/<stamp>_environment-inventory
+```
+
+Writes to `<run>/reports/`, organized around the three objectives:
+
+- `00_Environment_Inventory_Summary.xlsx` — a **Read Me** guide sheet plus environment-wide
+  rollups: Controllers (Obj 1), Job Ecosystem (Obj 2), Plugins Ranked / Flagged / Version Drift
+  (Obj 3), and any collection Errors.
+- `operations-center.xlsx` — the CJOC: version, connected-controller manifest, plugins + health.
+- `controller__<name>.xlsx` — one per controller: Overview, Resources & Agents (Obj 1),
+  Job Types + Jobs (Obj 2, with Freestyle rows highlighted as Pipeline-coaching targets),
+  Plugins + Plugin Health (Obj 3).
+
+Each sheet has a bold title, a frozen filterable header row, and auto-sized columns.
 
 ### Key flags
 
