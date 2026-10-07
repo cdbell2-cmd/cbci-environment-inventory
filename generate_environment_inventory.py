@@ -284,7 +284,12 @@ def scmUrlsOf = { item ->
 
 def triggerNames = { m ->
     def names = [] as Set
-    try { m.keySet().each { td -> names << td.getClass().getName().tokenize('.').last() } } catch (ex) { }
+    // getTriggers() maps TriggerDescriptor -> Trigger. Use the trigger's own class and strip
+    // any inner '$DescriptorImpl' so it reads as e.g. 'SCMTrigger' / 'TimerTrigger'.
+    try { m.each { td, trig ->
+        def cls = (trig != null ? trig.getClass() : td.getClass()).getName().tokenize('.').last().replaceAll(/\$.*$/, '')
+        names << cls
+    } } catch (ex) { }
     return (names as List)
 }
 
@@ -294,10 +299,46 @@ def triggersOf = { item ->
     return (out as List)
 }
 
+// Objective 2 wants Declarative and Scripted pipelines distinguished. An inline CPS
+// script is classified by parsing it for a top-level 'pipeline {' block; a Jenkinsfile
+// from SCM (and multibranch branch jobs) is classified from the declarative execution
+// marker left on recent builds. Anything we cannot determine stays the generic 'Pipeline'.
+def declarativeFromBuild = { job ->
+    try {
+        def b = job.getLastBuild()
+        int scanned = 0
+        while (b != null && scanned < 10) {
+            if (b.getAllActions().find { it.getClass().getName().contains('ExecutionModelAction') } != null) { return 'Declarative' }
+            b = b.getPreviousBuild(); scanned++
+        }
+    } catch (ex) { }
+    return null
+}
+
+def pipelineStyle = { item ->
+    try {
+        if (!item.metaClass.respondsTo(item, 'getDefinition')) { return null }
+        def defn = item.getDefinition()
+        if (defn == null) { return null }
+        // CpsScmFlowDefinition (Jenkinsfile-from-SCM) does NOT contain this substring.
+        if (defn.getClass().getName().contains('CpsFlowDefinition')) {
+            def script = invoke0(defn, 'getScript')
+            if (script instanceof CharSequence) {
+                return (script =~ /(?m)^\s*pipeline\s*\{/) ? 'Declarative' : 'Scripted'
+            }
+        }
+    } catch (ex) { }
+    return declarativeFromBuild(item)
+}
+
 def out = [version: Jenkins.VERSION, jobs: [], jobTypeCounts: [:], agents: [], plugins: [], scmProbe: []]
 
 Jenkins.instance.getAllItems().each { item ->
+    // A MatrixConfiguration is an axis-combination child of a Matrix job, not an independent
+    // job — exclude it from both the per-job list and the type counts.
+    if (item.getClass().getName().contains('MatrixConfiguration')) { return }
     def t = typeOf(item)
+    if (t == 'Pipeline') { t = pipelineStyle(item) ?: 'Pipeline' }
     out.jobTypeCounts[t] = (out.jobTypeCounts[t] ?: 0) + 1
     // Skip plain folders from the per-job list (kept only in the type counts)
     if (t == 'Folder') { return }
@@ -597,7 +638,7 @@ def run_plugin_health(controller_url, auth_user, auth_token, folder, args):
 # Org-wide aggregation
 # --------------------------------------------------------------------------------------
 def accumulate_org_usage(org, controller_name, usage_json):
-    """Fold one controller's plugin-usage JSON into the org-wide accumulator."""
+    """Fold one controller's plugin-usage JSON into the org-wide accumulator (job invocations)."""
     usages = (usage_json or {}).get('usages', {})
     for plugin, entries in usages.items():
         slot = org.setdefault(plugin, {
@@ -609,6 +650,26 @@ def accumulate_org_usage(org, controller_name, usage_json):
             v = (e.get('pluginInfo') or {}).get('currentVersion')
             if v:
                 slot['versions'].add(v)
+
+
+def accumulate_org_installs(org, instance_name, plugins):
+    """Fold per-instance *installed* plugins (from the Groovy list) into the org accumulator.
+
+    The Groovy plugin list is always available, so a controller that does not expose
+    /pluginUsage/download (e.g. the Plugin Usage Analyzer plugin is not installed) still
+    counts toward each plugin's '# Controllers' install total and 'Versions Seen'. Job
+    invocations remain usage-derived (0 for install-only instances)."""
+    for p in plugins or []:
+        name = p.get('shortName')
+        if not name:
+            continue
+        slot = org.setdefault(name, {
+            'controllers': set(), 'job_invocations': 0, 'versions': set(),
+        })
+        slot['controllers'].add(instance_name)
+        v = p.get('version')
+        if v:
+            slot['versions'].add(v)
 
 
 def write_org_reports(org_dir, org, health_index):
@@ -763,6 +824,8 @@ def main():
             oc_plugins = run_groovy(session, oc_url, GROOVY_PLUGINS, auth)
             oc_info['version'] = oc_plugins.get('version')
             collect_plugins_csv(oc_dir / 'oc-plugins.csv', oc_plugins.get('plugins', []))
+            # Count installs from the Groovy list (independent of /pluginUsage availability).
+            accumulate_org_installs(org_usage, 'operations-center', oc_plugins.get('plugins', []))
         except Exception as e:
             record_error('operations-center', 'plugins', oc_url, e)
         # The OC may not expose /pluginUsage/download; guard it.
@@ -822,6 +885,9 @@ def main():
             if inv is not None and inv.get('plugins') is not None:
                 try:
                     collect_plugins_csv(folder / 'plugins.csv', inv.get('plugins', []))
+                    # Count installs from the Groovy list so this controller contributes to the
+                    # org '# Controllers' total even if /pluginUsage/download is unavailable.
+                    accumulate_org_installs(org_usage, name, inv.get('plugins', []))
                 except Exception as e:
                     record_error(name, 'plugins', c_url, e)
             try:

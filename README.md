@@ -27,7 +27,7 @@ this same folder** — it does not reach back into the `plugin-utilities` toolki
 | Objective | Data points | Source |
 |-----------|-------------|--------|
 | 1. Resource allocation | name, URL, version, CPU, memory, HA/replicas, owning team, static (non-k8s) agent specs | Groovy on the OC (provisioning) + Groovy on each controller (version, agents) |
-| 2. Job ecosystem | job type, SCM repo, trigger(s), builds/week, per-controller type counts | Groovy on each controller |
+| 2. Job ecosystem | job type (incl. **Declarative vs Scripted** pipelines), SCM repo, trigger(s), builds/week, per-controller type counts | Groovy on each controller |
 | 3. Plugin usage & health | name, version, enabled/disabled per instance; org-wide ranked rollup; version drift | Groovy (list) + reused `generate_plugin_health_report.py` (health CSV) |
 
 ## How it works
@@ -117,6 +117,21 @@ output/<YYYYMMDD-HHMMSS>_environment-inventory/
 - **SCM:** extracted from Git remotes, provider sources (`owner/repo` + server URL), and a generic
   URL-getter sweep. If a Multibranch/Org-Folder has no configured source, `N/A` is correct and
   `scm-probe.json` records the (empty or unrecognized) source objects for confirmation.
+- **Pipeline style:** `WorkflowJob`s are reported as `Declarative` or `Scripted` where it can be
+  determined — inline CPS scripts are parsed for a top-level `pipeline { }` block; Jenkinsfile-from-SCM
+  and multibranch branches are classified from the declarative execution marker on recent builds.
+  Jobs that have never built and are defined from SCM may stay the generic `Pipeline` until first run.
+- **Validation:** `sample-data/` contains a seeder that populates a controller with representative
+  Git-backed jobs, triggers, pipeline styles, team folders, and a static agent, so the collector's
+  output can be verified before running against the real environment. See `sample-data/README.md`.
 - Build frequency is a windowed estimate over the last `--build-frequency-days` days.
-- The OC may not expose `/pluginUsage/download`; that step is guarded and recorded, not fatal.
+- The OC (or a controller) may not expose `/pluginUsage/download` — e.g. the CloudBees Plugin
+  Usage Analyzer plugin is not installed. That step is guarded and recorded in
+  `inventory-errors.csv`, not fatal. The org-wide **`# Controllers`** install count and
+  **`Versions Seen`** still include such instances, because they are accumulated from the
+  always-available Groovy plugin list; only **`# Job Invocations`** (usage-derived) is 0 for an
+  instance whose usage download failed.
+- Trigger names are reported by their trigger type (e.g. `SCMTrigger`, `TimerTrigger`), and
+  `MatrixConfiguration` axis children are excluded from the job list/counts (the parent `Matrix`
+  job is reported).
 - Read-only: this tool only reads from the live environment and writes locally under `output/`.
