@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# Generated inventory output
+output/
+*_environment-inventory/
+
+# Python
+__pycache__/
+*.pyc

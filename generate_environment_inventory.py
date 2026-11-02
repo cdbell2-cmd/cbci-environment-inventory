@@ -517,9 +517,15 @@ def resolve_controller_url(raw_url, oc_url, full_name, name):
 
     CloudBees' getEndpointUrl() is sometimes empty, in which case discovery returns the
     OC-relative item path (e.g. 'job/controller-0/'). Managed Controllers are served at
-    the OC host under their full item path WITHOUT the '/job/' segments and WITHOUT the
+    the OC host under a SINGLE path segment WITHOUT the '/job/' segments and WITHOUT the
     OC's own context path — e.g. OC 'http://host/cjoc' -> controller 'http://host/controller-0/'.
-    If the OC already gave us an absolute URL (subdomain-per-controller setups), trust it.
+
+    When a controller lives inside one or more folders, CloudBees flattens the folder
+    path into that single routing segment with hyphens (the ingress convention), it is
+    NOT served as a nested URL path. So a controller whose getFullName() is
+    'releases/v2609a' is served at 'http://host/releases-v2609a', not at
+    'http://host/releases/v2609a'. If the OC already handed us an absolute URL
+    (subdomain-per-controller setups), trust it.
     """
     if raw_url:
         sp = urlsplit(raw_url)
@@ -527,8 +533,11 @@ def resolve_controller_url(raw_url, oc_url, full_name, name):
             return raw_url.rstrip('/')
     oc = urlsplit(oc_url)
     base = f"{oc.scheme}://{oc.netloc}"
-    path = (full_name or name or '').strip('/')
-    return f"{base}/{path}".rstrip('/')
+    # getFullName() joins folder(s) and the controller with '/'; the managed-controller
+    # endpoint flattens those segments with '-'. A top-level controller (no folders) has
+    # no '/' in its full name, so the replace is a no-op and behaviour is unchanged.
+    segment = (full_name or name or '').strip('/').replace('/', '-')
+    return f"{base}/{segment}".rstrip('/')
 
 
 def derive_team(full_name, name, pattern):
